@@ -1,0 +1,17 @@
+include README.md
+include LICENSE
+include pyproject.toml
+include examples/example_spectra.txt
+include examples/example_components.csv
+include examples/example_fit.png
+recursive-include src *.py
+recursive-include docs *.rst *.py
+
+global-exclude __pycache__
+global-exclude *.py[cod]
+
+prune .pytest_cache
+prune tests
+prune build
+prune dist
+prune docs/_build
