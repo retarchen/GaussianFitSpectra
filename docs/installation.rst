@@ -1,16 +1,10 @@
 Installation
 ============
 
-Install the package in editable mode from the project root:
+Install the package from PyPI:
 
 .. code-block:: bash
 
-   pip install -e .
-
-For development and testing:
-
-.. code-block:: bash
-
-   pip install -e ".[dev]"
+   pip install gaussFitSpec
 
 The package depends on ``numpy``, ``scipy``, ``pandas``, and ``matplotlib``.
