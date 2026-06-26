@@ -1,7 +1,7 @@
 # gaussFitSpec
 
 [![PyPI version](https://img.shields.io/pypi/v/gaussfitspec.svg)](https://pypi.org/project/gaussFitSpec/)
-[![Documentation Status](https://readthedocs.org/projects/gaussfitspec/badge/?version=latest)](https://gaussfitspec.readthedocs.io/en/latest/)
+[![Documentation Status](https://readthedocs.org/projects/gaussianfitspectra/badge/?version=latest)](https://gaussianfitspectra.readthedocs.io/en/latest/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20917299.svg)](https://doi.org/10.5281/zenodo.20917299)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -13,7 +13,7 @@ and returns fitted component parameters as a pandas DataFrame.
 ## Links
 
 - PyPI: https://pypi.org/project/gaussFitSpec/
-- Documentation: https://gaussfitspec.readthedocs.io/en/latest/
+- Documentation: https://gaussianfitspectra.readthedocs.io/en/latest/
 - Source code: https://github.com/retarchen/GaussianFitSpectra
 - Citation DOI: https://doi.org/10.5281/zenodo.20917299
 

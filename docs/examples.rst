@@ -7,6 +7,10 @@ The repository includes an example spectrum at:
 
    examples/example_spectra.txt
 
+You can also download the bundled input spectrum directly:
+
+:download:`Download example_spectra.txt <../examples/example_spectra.txt>`
+
 Run the example script from the project root:
 
 .. code-block:: bash
@@ -27,6 +31,8 @@ The example output plot is shown below as a reference for a successful fit:
    :align: center
    :width: 90%
 
-The fitted component table is also included as a downloadable example output:
+The fitted component table is written by the example script to:
 
-:download:`Download example_components.csv <../examples/example_components.csv>`
+.. code-block:: text
+
+   examples/example_components.csv
