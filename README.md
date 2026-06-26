@@ -1,7 +1,6 @@
 # gaussFitSpec
 
 [![PyPI version](https://img.shields.io/pypi/v/gaussfitspec.svg)](https://pypi.org/project/gaussFitSpec/)
-[![Python versions](https://img.shields.io/pypi/pyversions/gaussfitspec.svg)](https://pypi.org/project/gaussFitSpec/)
 [![Documentation Status](https://readthedocs.org/projects/gaussfitspec/badge/?version=latest)](https://gaussfitspec.readthedocs.io/en/latest/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20917299.svg)](https://doi.org/10.5281/zenodo.20917299)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
