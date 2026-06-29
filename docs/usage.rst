@@ -44,6 +44,36 @@ Use ``min_fwhm`` and ``max_fwhm`` to constrain component widths:
        max_fwhm=40.0,
    )
 
+For absorption spectra represented as ``1 - exp(-tau)`` or tau, use
+``positive_amplitudes=True`` so fitted Gaussian amplitudes cannot become
+negative:
+
+.. code-block:: python
+
+   result = fit_spectrum(
+       velocity,
+       absorption,
+       absorption_err,
+       method="bic",
+       positive_amplitudes=True,
+   )
+
+When fitting from manual ``initial_centers``, ``initial_center_window`` keeps
+each center close to its starting value. ``filter_components=True`` applies the
+same weak-component cleanup used by automatic BIC fits:
+
+.. code-block:: python
+
+   result = fit_spectrum(
+       velocity,
+       tau,
+       tau_err,
+       initial_centers=[-5.0, 2.0],
+       initial_center_window=5.0,
+       positive_amplitudes=True,
+       filter_components=True,
+   )
+
 Fit Result
 ----------
 

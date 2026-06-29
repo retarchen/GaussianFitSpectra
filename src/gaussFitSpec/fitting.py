@@ -122,17 +122,20 @@ def fit_spectrum(
     min_fwhm=None,
     max_fwhm=None,
     initial_centers=None,
+    initial_center_window=None,
     fixed_n_components=None,
     bic_weight=10.0,
+    positive_amplitudes=False,
+    filter_components=False,
     verbose=False,
 ):
     """Fit a 1D spectrum with multiple Gaussian components.
 
     The fitter builds candidate models sequentially, using peaks in the
     spectrum or residuals as initial guesses. Gaussian amplitudes may be
-    positive or negative, component centers are bounded by the input velocity
-    range, and widths are constrained by ``min_fwhm`` and ``max_fwhm`` when
-    provided.
+    positive or negative by default, component centers are bounded by the input
+    velocity range, and widths are constrained by ``min_fwhm`` and ``max_fwhm``
+    when provided.
 
     Args:
         velocity: One-dimensional velocity grid.
@@ -154,12 +157,20 @@ def fit_spectrum(
         initial_centers: Optional iterable of component centers. When provided,
             the fitter uses these centers as the initial model instead of
             automatic model selection.
+        initial_center_window: Optional maximum absolute distance each fitted
+            center may move from its corresponding ``initial_centers`` value.
+            This is only used when ``initial_centers`` is provided.
         fixed_n_components: Optional fixed number of components to fit. When
             provided, automatic model selection is skipped.
         bic_weight: Minimum BIC improvement required before accepting an
             additional Gaussian component when ``method="bic"``. This also
             controls the extra penalty term applied to weak components, matching
             the behavior of the reference fitting script.
+        positive_amplitudes: If ``True``, constrain Gaussian amplitudes to be
+            non-negative. Use this for absorption spectra represented as
+            ``1 - exp(-tau)`` or tau, where negative components are unphysical.
+        filter_components: If ``True``, apply the weak-component filter after a
+            manual ``initial_centers`` fit, matching the automatic BIC cleanup.
         verbose: If ``True``, print per-iteration progress messages during
             sequential model selection. For BIC fits this includes the BIC
             value and number of Gaussian components tried.
@@ -199,12 +210,15 @@ def fit_spectrum(
         min_fwhm=min_fwhm,
         max_fwhm=max_fwhm,
         bic_weight=float(bic_weight),
+        positive_amplitudes=bool(positive_amplitudes),
         verbose=bool(verbose),
     )
 
     if initial_centers is not None:
         params, covariance, stats_dict = fitter.fit_with_centers(
-            np.asarray(list(initial_centers), dtype=float)
+            np.asarray(list(initial_centers), dtype=float),
+            center_window=initial_center_window,
+            filter_components=bool(filter_components),
         )
     elif fixed_n_components is not None:
         params, covariance, stats_dict = fitter.fit_fixed_n(int(fixed_n_components))
@@ -286,11 +300,22 @@ def _estimate_noise(spectrum):
 class _SequentialGaussianFitter:
     """Sequential model builder inspired by the original script logic."""
 
-    def __init__(self, velocity, spectrum, spectrum_err, min_fwhm=None, max_fwhm=None, bic_weight=10.0, verbose=False):
+    def __init__(
+        self,
+        velocity,
+        spectrum,
+        spectrum_err,
+        min_fwhm=None,
+        max_fwhm=None,
+        bic_weight=10.0,
+        positive_amplitudes=False,
+        verbose=False,
+    ):
         self.velocity = velocity
         self.spectrum = spectrum
         self.spectrum_err = spectrum_err
         self.bic_weight = float(bic_weight)
+        self.positive_amplitudes = bool(positive_amplitudes)
         self.verbose = bool(verbose)
         self.noise = float(np.nanmedian(np.abs(spectrum_err)))
         self.dx = float(np.nanmedian(np.diff(velocity)))
@@ -304,11 +329,21 @@ class _SequentialGaussianFitter:
         self.max_sigma = max((max_fwhm or default_max_fwhm) / FWHM_FACTOR, self.min_sigma * 1.5)
         self.amp_bound = max(5.0 * self.noise, 2.5 * np.max(np.abs(self.spectrum)))
 
-    def fit_with_centers(self, centers):
+    def fit_with_centers(self, centers, center_window=None, filter_components=False):
         if centers.size == 0:
             raise ValueError("initial_centers must contain at least one center.")
         params = self._initial_params_from_centers(centers, self.spectrum)
-        return self._fit_model(params)
+        params, covariance, stats_dict = self._fit_model(params, center_window=center_window)
+        if filter_components:
+            bic_history = [{"n_components": len(params) // 3, "bic": float(stats_dict["bic"])}]
+            params, covariance, stats_dict = self._refit_filtered_components(
+                params,
+                covariance,
+                stats_dict,
+                bic_history,
+                center_window=center_window,
+            )
+        return params, covariance, stats_dict
 
     def fit_fixed_n(self, n_components):
         if n_components < 1:
@@ -445,8 +480,15 @@ class _SequentialGaussianFitter:
             params0 = np.concatenate([previous_params, new_guess])
         return self._fit_model(params0)
 
-    def _fit_model(self, params0):
-        lower_bounds, upper_bounds = self._parameter_bounds(len(params0) // 3)
+    def _fit_model(self, params0, center_window=None):
+        center_guesses = None
+        if center_window is not None:
+            center_guesses = np.asarray(params0, dtype=float)[1::3]
+        lower_bounds, upper_bounds = self._parameter_bounds(
+            len(params0) // 3,
+            center_guesses=center_guesses,
+            center_window=center_window,
+        )
         params0 = np.clip(params0, lower_bounds + 1e-6, upper_bounds - 1e-6)
         try:
             with warnings.catch_warnings():
@@ -529,6 +571,8 @@ class _SequentialGaussianFitter:
         for center in centers:
             idx = int(np.argmin(np.abs(self.velocity - center)))
             amplitude = reference_signal[idx]
+            if self.positive_amplitudes:
+                amplitude = max(float(amplitude), self.noise)
             if not np.isfinite(amplitude) or abs(amplitude) < self.noise:
                 amplitude = np.sign(amplitude) * self.noise if amplitude != 0 else self.noise
             params.extend([float(amplitude), float(self.velocity[idx]), float(default_sigma)])
@@ -585,7 +629,7 @@ class _SequentialGaussianFitter:
                 candidates.append(center)
         return np.asarray(candidates, dtype=float)
 
-    def _refit_filtered_components(self, params, covariance, stats_dict, bic_history):
+    def _refit_filtered_components(self, params, covariance, stats_dict, bic_history, center_window=None):
         if params is None or len(params) <= 3:
             stats_dict = dict(stats_dict)
             stats_dict["bic_history"] = list(bic_history)
@@ -615,16 +659,33 @@ class _SequentialGaussianFitter:
         filtered_matrix = filtered_matrix[keep_mask]
         filtered_params = filtered_matrix.reshape(-1)
 
-        final_params, final_covariance, final_stats = self._fit_model(filtered_params)
+        final_params, final_covariance, final_stats = self._fit_model(
+            filtered_params,
+            center_window=center_window,
+        )
         final_stats["bic_history"] = list(bic_history)
         return final_params, final_covariance, final_stats
 
-    def _parameter_bounds(self, n_components):
+    def _parameter_bounds(self, n_components, center_guesses=None, center_window=None):
         lower_bounds = []
         upper_bounds = []
-        for _ in range(n_components):
-            lower_bounds.extend([-self.amp_bound, float(self.velocity.min()), self.min_sigma])
-            upper_bounds.extend([self.amp_bound, float(self.velocity.max()), self.max_sigma])
+        amp_lower = 0.0 if self.positive_amplitudes else -self.amp_bound
+        if center_window is not None:
+            center_window = float(center_window)
+            if center_window <= 0:
+                raise ValueError("initial_center_window must be positive.")
+            center_guesses = np.asarray(center_guesses, dtype=float)
+            if center_guesses.size != n_components:
+                raise ValueError("center_guesses must match the number of components.")
+        for index in range(n_components):
+            if center_window is None:
+                center_low = float(self.velocity.min())
+                center_high = float(self.velocity.max())
+            else:
+                center_low = max(float(self.velocity.min()), float(center_guesses[index]) - center_window)
+                center_high = min(float(self.velocity.max()), float(center_guesses[index]) + center_window)
+            lower_bounds.extend([amp_lower, center_low, self.min_sigma])
+            upper_bounds.extend([self.amp_bound, center_high, self.max_sigma])
         return np.asarray(lower_bounds, dtype=float), np.asarray(upper_bounds, dtype=float)
 
     def _sort_fit(self, params, covariance):

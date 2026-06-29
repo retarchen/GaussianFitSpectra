@@ -57,6 +57,26 @@ def test_bic_selects_two_components_and_sorts_by_velocity():
     assert result.parameters == pytest.approx([2.5, -3.0, 0.7, 1.8, 2.2, 1.1], abs=1e-4)
 
 
+def test_bic_can_constrain_absorption_amplitudes_positive():
+    velocity, spectrum, spectrum_err = make_synthetic_spectrum(
+        [(0.30, -2.5, 0.65), (0.42, 2.0, 0.8)],
+        noise_sigma=0.02,
+        seed=3,
+    )
+
+    result = fit_spectrum(
+        velocity,
+        spectrum,
+        spectrum_err,
+        method="bic",
+        max_components=4,
+        positive_amplitudes=True,
+    )
+
+    assert result.n_components >= 1
+    assert (result.parameters[0::3] >= 0).all()
+
+
 def test_bic_verbose_output_and_weight_are_configurable(capsys):
     components = [(2.5, -3.0, 0.7), (1.8, 2.2, 1.1)]
     velocity, spectrum, spectrum_err = make_synthetic_spectrum(components)
@@ -94,6 +114,38 @@ def test_initial_centers_override_model_selection_and_sort_output():
     assert result.n_components == 2
     assert result.method == "f_test"
     assert result.components["velocity"].to_list() == pytest.approx([-4.0, 3.5], abs=1e-4)
+
+
+def test_initial_center_window_constrains_manual_center_motion():
+    velocity, spectrum, spectrum_err = make_synthetic_spectrum([(1.2, 5.0, 0.8)])
+
+    result = fit_spectrum(
+        velocity,
+        spectrum,
+        spectrum_err,
+        initial_centers=[0.0],
+        initial_center_window=1.0,
+        positive_amplitudes=True,
+    )
+
+    assert abs(result.parameters[1]) <= 1.0 + 1.0e-6
+
+
+def test_manual_initial_center_fit_can_filter_weak_components():
+    velocity, spectrum, spectrum_err = make_synthetic_spectrum([(1.2, 0.0, 0.8)])
+
+    result = fit_spectrum(
+        velocity,
+        spectrum,
+        spectrum_err,
+        initial_centers=[0.0, 8.0],
+        initial_center_window=1.0,
+        positive_amplitudes=True,
+        filter_components=True,
+    )
+
+    assert result.n_components == 1
+    assert abs(result.parameters[1]) < 0.1
 
 
 def test_f_test_accepts_second_component_when_improvement_is_significant():

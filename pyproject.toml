@@ -4,12 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaussFitSpec"
-version = "1.0.0"
+version = "1.0.1"
 description = "Lightweight 1D Gaussian spectral decomposition."
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
-license-files = ["LICENSE"]
+license = { text = "MIT" }
 authors = [
   { name = "Hongxing Chen" }
 ]
@@ -31,6 +30,7 @@ docs = [
 
 [tool.setuptools]
 package-dir = { "" = "src" }
+license-files = ["LICENSE"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
