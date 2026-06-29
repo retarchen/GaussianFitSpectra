@@ -8,6 +8,7 @@ import warnings
 import numpy as np
 import pandas as pd
 from scipy import stats
+from scipy.ndimage import convolve1d
 from scipy.ndimage import gaussian_filter1d
 from scipy.optimize import OptimizeWarning, curve_fit
 from scipy.signal import find_peaks
@@ -122,6 +123,8 @@ def fit_spectrum(
     max_fwhm=None,
     initial_centers=None,
     fixed_n_components=None,
+    bic_weight=10.0,
+    verbose=False,
 ):
     """Fit a 1D spectrum with multiple Gaussian components.
 
@@ -153,6 +156,13 @@ def fit_spectrum(
             automatic model selection.
         fixed_n_components: Optional fixed number of components to fit. When
             provided, automatic model selection is skipped.
+        bic_weight: Minimum BIC improvement required before accepting an
+            additional Gaussian component when ``method="bic"``. This also
+            controls the extra penalty term applied to weak components, matching
+            the behavior of the reference fitting script.
+        verbose: If ``True``, print per-iteration progress messages during
+            sequential model selection. For BIC fits this includes the BIC
+            value and number of Gaussian components tried.
 
     Returns:
         A :class:`SpectrumFitResult` containing the component table, model
@@ -188,6 +198,8 @@ def fit_spectrum(
         spectrum_err=spectrum_err,
         min_fwhm=min_fwhm,
         max_fwhm=max_fwhm,
+        bic_weight=float(bic_weight),
+        verbose=bool(verbose),
     )
 
     if initial_centers is not None:
@@ -274,10 +286,12 @@ def _estimate_noise(spectrum):
 class _SequentialGaussianFitter:
     """Sequential model builder inspired by the original script logic."""
 
-    def __init__(self, velocity, spectrum, spectrum_err, min_fwhm=None, max_fwhm=None):
+    def __init__(self, velocity, spectrum, spectrum_err, min_fwhm=None, max_fwhm=None, bic_weight=10.0, verbose=False):
         self.velocity = velocity
         self.spectrum = spectrum
         self.spectrum_err = spectrum_err
+        self.bic_weight = float(bic_weight)
+        self.verbose = bool(verbose)
         self.noise = float(np.nanmedian(np.abs(spectrum_err)))
         self.dx = float(np.nanmedian(np.diff(velocity)))
         velocity_span = float(velocity.max() - velocity.min())
@@ -307,16 +321,75 @@ class _SequentialGaussianFitter:
         return params, covariance, stats_dict
 
     def select_bic(self, max_components):
-        best = None
-        previous_params = None
-        for n_components in range(1, max_components + 1):
-            params, covariance, stats_dict = self._fit_next_model(n_components, previous_params)
-            previous_params = params
-            if best is None or stats_dict["bic"] < best[2]["bic"]:
-                best = (params, covariance, stats_dict)
-        if best is None:
+        centers = self._initial_bic_candidate_centers()
+        if centers.size == 0:
+            centers = np.array([self.velocity[int(np.argmax(self.spectrum))]], dtype=float)
+
+        params0 = self._initial_params_from_centers(centers[:1], self.spectrum)
+        params, covariance, stats_dict = self._fit_model(params0)
+        bic_history = [{"n_components": 1, "bic": float(stats_dict["bic"])}]
+        if self.verbose:
+            print(f"BIC {stats_dict['bic']:.6f} n=1")
+
+        best_params = params
+        best_covariance = covariance
+        best_stats = dict(stats_dict)
+        best_stats["bic_history"] = list(bic_history)
+        current_params = params
+        current_centers = list(np.asarray(current_params)[1::3])
+        residual = self.spectrum - multi_gaussian(self.velocity, *current_params)
+        smoothed_residual = self._smooth_residual(residual)
+
+        while len(current_centers) < max_components:
+            candidate_centers = self._candidate_centers_from_signal(smoothed_residual, used_centers=current_centers)
+            if candidate_centers.size == 0:
+                break
+
+            best_candidate = None
+            for new_center in candidate_centers:
+                new_guess = self._initial_params_from_centers(np.array([new_center]), residual)
+                trial_params0 = np.concatenate([current_params, new_guess])
+                try:
+                    trial_params, trial_covariance, trial_stats = self._fit_model(trial_params0)
+                except RuntimeError:
+                    continue
+                if best_candidate is None or trial_stats["bic"] < best_candidate[2]["bic"]:
+                    best_candidate = (trial_params, trial_covariance, trial_stats)
+
+            if best_candidate is None:
+                break
+
+            current_params, current_covariance, current_stats = best_candidate
+            n_components = len(current_params) // 3
+            bic_history.append({"n_components": n_components, "bic": float(current_stats["bic"])})
+            if self.verbose:
+                print(f"BIC {current_stats['bic']:.6f} n={n_components}")
+
+            improvement = best_stats["bic"] - current_stats["bic"]
+            if improvement > self.bic_weight:
+                best_params = current_params
+                best_covariance = current_covariance
+                best_stats = dict(current_stats)
+                best_stats["bic_history"] = list(bic_history)
+            else:
+                break
+
+            current_centers = list(np.asarray(current_params)[1::3])
+            residual = self.spectrum - multi_gaussian(self.velocity, *current_params)
+            smoothed_residual = self._smooth_residual(residual)
+
+        best_params, best_covariance, best_stats = self._refit_filtered_components(
+            best_params,
+            best_covariance,
+            best_stats,
+            bic_history,
+        )
+
+        if best_params is None:
             raise RuntimeError("No valid fits were found.")
-        return best
+        if self.verbose:
+            print(f"final BIC={best_stats['bic']:.6f} n={len(best_params) // 3}")
+        return best_params, best_covariance, best_stats
 
     def select_f_test(self, max_components, alpha):
         accepted = None
@@ -403,11 +476,19 @@ class _SequentialGaussianFitter:
         n_samples = len(self.velocity)
         n_params = len(params)
         dof = max(n_samples - n_params, 1)
+        bic = chi2 + n_params * np.log(n_samples)
+        weak_component_floor = max(
+            abs(float(np.min(self.spectrum))),
+            float(np.max(np.abs(params[0::3]))) / 5.0 if len(params) else 0.0,
+            _estimate_component_noise(self.spectrum, self.spectrum_err, n=10) * 4.0,
+        )
+        weak_component_count = int(np.sum(np.abs(params[0::3]) < weak_component_floor))
+        bic += self.bic_weight * weak_component_count
         return {
             "chi2": chi2,
             "reduced_chi2": chi2 / dof,
             "aic": chi2 + 2.0 * n_params,
-            "bic": chi2 + n_params * np.log(n_samples),
+            "bic": float(bic),
             "rss": rss,
             "n_parameters": n_params,
         }
@@ -452,6 +533,91 @@ class _SequentialGaussianFitter:
                 amplitude = np.sign(amplitude) * self.noise if amplitude != 0 else self.noise
             params.extend([float(amplitude), float(self.velocity[idx]), float(default_sigma)])
         return np.asarray(params, dtype=float)
+
+    def _initial_bic_candidate_centers(self):
+        peak_indices, _ = find_peaks(
+            self.spectrum,
+            height=np.max(self.spectrum) / 5.0 if np.max(self.spectrum) > 0 else self.noise,
+            distance=5,
+        )
+        if peak_indices.size == 0:
+            return np.array([self.velocity[int(np.argmax(self.spectrum))]], dtype=float)
+
+        order = np.argsort(self.spectrum[peak_indices])[::-1]
+        ordered = peak_indices[order]
+        edge_buffer = max(self.velocity_span / 20.0, abs(self.dx) * 10.0)
+        mask = (self.velocity[ordered] > self.velocity.min() + edge_buffer) & (
+            self.velocity[ordered] < self.velocity.max() - edge_buffer
+        )
+        filtered = ordered[mask]
+        if filtered.size == 0:
+            filtered = ordered
+        return self.velocity[filtered]
+
+    @property
+    def velocity_span(self):
+        return float(self.velocity.max() - self.velocity.min())
+
+    def _smooth_residual(self, residual):
+        kernel = np.array([0.054489, 0.244201, 0.40262, 0.244201, 0.054489], dtype=float)
+        return convolve1d(residual, kernel, mode="nearest")
+
+    def _candidate_centers_from_signal(self, signal, used_centers):
+        height = np.max(signal) / 5.0 if np.max(signal) > 0 else self.noise
+        peak_indices, _ = find_peaks(signal, height=height, distance=5)
+        if peak_indices.size == 0:
+            peak_indices = np.array([int(np.argmax(signal))], dtype=int)
+        order = np.argsort(signal[peak_indices])[::-1]
+        ordered = peak_indices[order]
+        edge_buffer = max(self.velocity_span / 20.0, abs(self.dx) * 10.0)
+        ordered = ordered[
+            (self.velocity[ordered] > self.velocity.min() + edge_buffer)
+            & (self.velocity[ordered] < self.velocity.max() - edge_buffer)
+        ]
+        if ordered.size == 0:
+            return np.array([], dtype=float)
+
+        candidates = []
+        min_separation = max(self.min_sigma * FWHM_FACTOR, abs(self.dx) * 2.0)
+        for idx in ordered[:5]:
+            center = float(self.velocity[idx])
+            if all(abs(center - existing) >= min_separation for existing in used_centers):
+                candidates.append(center)
+        return np.asarray(candidates, dtype=float)
+
+    def _refit_filtered_components(self, params, covariance, stats_dict, bic_history):
+        if params is None or len(params) <= 3:
+            stats_dict = dict(stats_dict)
+            stats_dict["bic_history"] = list(bic_history)
+            return params, covariance, stats_dict
+
+        component_rows = params.reshape(-1, 3)
+        filtered_rows = []
+        for row in component_rows:
+            noise_here = _estimate_component_noise_at_center(row[1], self.velocity, self.spectrum_err)
+            if row[0] > noise_here * 3.0:
+                filtered_rows.append(row)
+
+        if not filtered_rows:
+            filtered_rows = [component_rows[int(np.argmax(component_rows[:, 0]))]]
+
+        filtered_params = np.asarray(filtered_rows, dtype=float).reshape(-1)
+        final_floor = max(
+            _estimate_component_noise(self.spectrum, self.spectrum_err, n=10) * 3.0,
+            abs(float(np.min(self.spectrum))) * 0.8,
+        )
+        filtered_matrix = filtered_params.reshape(-1, 3)
+        strongest = int(np.argmax(filtered_matrix[:, 0]))
+        keep_mask = ~(
+            (filtered_matrix[:, 0] < final_floor)
+            & (np.abs(filtered_matrix[:, 1] - filtered_matrix[strongest, 1]) > 20.0)
+        )
+        filtered_matrix = filtered_matrix[keep_mask]
+        filtered_params = filtered_matrix.reshape(-1)
+
+        final_params, final_covariance, final_stats = self._fit_model(filtered_params)
+        final_stats["bic_history"] = list(bic_history)
+        return final_params, final_covariance, final_stats
 
     def _parameter_bounds(self, n_components):
         lower_bounds = []
@@ -531,3 +697,22 @@ def _components_dataframe(name, params, covariance):
         )
 
     return pd.DataFrame(rows)
+
+
+def _estimate_component_noise(spectrum, spectrum_err, n=1):
+    spectrum = np.asarray(spectrum, dtype=float)
+    spectrum_err = np.asarray(spectrum_err, dtype=float)
+    positive = n * spectrum_err - spectrum
+    indices = np.argwhere(positive > 0).ravel()
+    if indices.size == 0:
+        return float(np.nanmean(spectrum_err))
+    return float(np.nanmean(spectrum_err[indices]))
+
+
+def _estimate_component_noise_at_center(center, velocity, spectrum_err):
+    velocity = np.asarray(velocity, dtype=float)
+    spectrum_err = np.asarray(spectrum_err, dtype=float)
+    indices = np.argwhere(np.abs(velocity - center) < 5.0).ravel()
+    if indices.size == 0:
+        return float(np.nanmean(spectrum_err))
+    return float(np.nanmean(spectrum_err[indices]))

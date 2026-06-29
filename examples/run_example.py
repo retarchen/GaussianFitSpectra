@@ -18,7 +18,7 @@ def main():
     input_file = examples_dir / "example_spectra.txt"
     output_csv = examples_dir / "example_components.csv"
     output_png = examples_dir / "example_fit.png"
-
+    
     velocity, spectrum, spectrum_err = read_spectrum(input_file)
     result = fit_spectrum(
         velocity,
@@ -27,6 +27,7 @@ def main():
         name="spectra1",
         method="bic",
         max_components=8,
+        verbose=True,
     )
 
     result.to_csv(output_csv)

@@ -52,8 +52,30 @@ def test_bic_selects_two_components_and_sorts_by_velocity():
 
     assert result.n_components == 2
     assert result.fit_statistics["n_parameters"] == 6
+    assert result.fit_statistics["bic_history"][0]["n_components"] == 1
     assert result.components["velocity"].to_list() == pytest.approx([-3.0, 2.2], abs=1e-4)
     assert result.parameters == pytest.approx([2.5, -3.0, 0.7, 1.8, 2.2, 1.1], abs=1e-4)
+
+
+def test_bic_verbose_output_and_weight_are_configurable(capsys):
+    components = [(2.5, -3.0, 0.7), (1.8, 2.2, 1.1)]
+    velocity, spectrum, spectrum_err = make_synthetic_spectrum(components)
+
+    result = fit_spectrum(
+        velocity,
+        spectrum,
+        spectrum_err,
+        method="bic",
+        max_components=4,
+        bic_weight=5.0,
+        verbose=True,
+    )
+
+    captured = capsys.readouterr()
+    assert "BIC" in captured.out
+    assert "n=1" in captured.out
+    assert "final BIC=" in captured.out
+    assert result.n_components >= 1
 
 
 def test_initial_centers_override_model_selection_and_sort_output():
@@ -91,4 +113,3 @@ def test_f_test_accepts_second_component_when_improvement_is_significant():
     assert result.fit_statistics["f_value"] > 0
     assert result.fit_statistics["f_test_pvalue"] < 0.05
     assert result.parameters == pytest.approx([3.0, -4.0, 0.7, 2.2, 3.5, 0.9], abs=0.06)
-
