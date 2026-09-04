@@ -567,10 +567,13 @@ class _SequentialGaussianFitter:
 
     def _initial_params_from_centers(self, centers, reference_signal):
         params = []
-        default_sigma = np.clip((self.max_sigma + self.min_sigma) / 3.0, self.min_sigma, self.max_sigma)
+        default_sigma = np.clip(abs(self.dx), self.min_sigma, self.max_sigma)
         for center in centers:
             idx = int(np.argmin(np.abs(self.velocity - center)))
-            amplitude = reference_signal[idx]
+            start = max(idx - 5, 0)
+            stop = min(idx + 6, self.spectrum_err.size)
+            local_noise = float(np.nanmean(np.abs(self.spectrum_err[start:stop])))
+            amplitude = local_noise
             if self.positive_amplitudes:
                 amplitude = max(float(amplitude), self.noise)
             if not np.isfinite(amplitude) or abs(amplitude) < self.noise:
