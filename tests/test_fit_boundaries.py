@@ -59,6 +59,22 @@ def test_fit_spectrum_enforces_min_fwhm_bound():
     assert result.components.loc[0, "fwhm"] == pytest.approx(1.0, abs=1e-4)
 
 
+def test_positive_amplitude_uses_local_three_sigma_lower_bound():
+    velocity = np.linspace(-5.0, 5.0, 201)
+    spectrum = np.zeros_like(velocity)
+    spectrum_err = np.full_like(velocity, 0.05)
+
+    result = fit_spectrum(
+        velocity,
+        spectrum,
+        spectrum_err,
+        fixed_n_components=1,
+        positive_amplitudes=True,
+    )
+
+    assert result.components.loc[0, "amplitude"] == pytest.approx(0.15, abs=1e-5)
+
+
 def test_bic_prefers_one_component_for_strongly_overlapping_lines():
     velocity, spectrum, spectrum_err = make_synthetic_spectrum(
         [(1.5, 0.0, 0.7), (1.0, 0.25, 0.7)]
@@ -68,4 +84,3 @@ def test_bic_prefers_one_component_for_strongly_overlapping_lines():
 
     assert result.n_components == 1
     assert result.fit_statistics["n_parameters"] == 3
-

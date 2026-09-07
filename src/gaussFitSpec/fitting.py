@@ -166,9 +166,10 @@ def fit_spectrum(
             additional Gaussian component when ``method="bic"``. This also
             controls the extra penalty term applied to weak components, matching
             the behavior of the reference fitting script.
-        positive_amplitudes: If ``True``, constrain Gaussian amplitudes to be
-            non-negative. Use this for absorption spectra represented as
-            ``1 - exp(-tau)`` or tau, where negative components are unphysical.
+        positive_amplitudes: If ``True``, constrain each Gaussian amplitude to
+            be at least three times the local uncertainty. Use this for
+            absorption spectra represented as ``1 - exp(-tau)`` or tau, where
+            negative and sub-three-sigma components are not retained.
         filter_components: If ``True``, apply the weak-component filter after a
             manual ``initial_centers`` fit, matching the automatic BIC cleanup.
         verbose: If ``True``, print per-iteration progress messages during
@@ -481,9 +482,7 @@ class _SequentialGaussianFitter:
         return self._fit_model(params0)
 
     def _fit_model(self, params0, center_window=None):
-        center_guesses = None
-        if center_window is not None:
-            center_guesses = np.asarray(params0, dtype=float)[1::3]
+        center_guesses = np.asarray(params0, dtype=float)[1::3]
         lower_bounds, upper_bounds = self._parameter_bounds(
             len(params0) // 3,
             center_guesses=center_guesses,
@@ -649,18 +648,6 @@ class _SequentialGaussianFitter:
             filtered_rows = [component_rows[int(np.argmax(component_rows[:, 0]))]]
 
         filtered_params = np.asarray(filtered_rows, dtype=float).reshape(-1)
-        final_floor = max(
-            _estimate_component_noise(self.spectrum, self.spectrum_err, n=10) * 3.0,
-            abs(float(np.min(self.spectrum))) * 0.8,
-        )
-        filtered_matrix = filtered_params.reshape(-1, 3)
-        strongest = int(np.argmax(filtered_matrix[:, 0]))
-        keep_mask = ~(
-            (filtered_matrix[:, 0] < final_floor)
-            & (np.abs(filtered_matrix[:, 1] - filtered_matrix[strongest, 1]) > 20.0)
-        )
-        filtered_matrix = filtered_matrix[keep_mask]
-        filtered_params = filtered_matrix.reshape(-1)
 
         final_params, final_covariance, final_stats = self._fit_model(
             filtered_params,
@@ -672,15 +659,20 @@ class _SequentialGaussianFitter:
     def _parameter_bounds(self, n_components, center_guesses=None, center_window=None):
         lower_bounds = []
         upper_bounds = []
-        amp_lower = 0.0 if self.positive_amplitudes else -self.amp_bound
+        center_guesses = np.asarray(center_guesses, dtype=float)
+        if center_guesses.size != n_components:
+            raise ValueError("center_guesses must match the number of components.")
         if center_window is not None:
             center_window = float(center_window)
             if center_window <= 0:
                 raise ValueError("initial_center_window must be positive.")
-            center_guesses = np.asarray(center_guesses, dtype=float)
-            if center_guesses.size != n_components:
-                raise ValueError("center_guesses must match the number of components.")
         for index in range(n_components):
+            if self.positive_amplitudes:
+                amp_lower = 3.0 * _estimate_component_noise_at_center(
+                    center_guesses[index], self.velocity, self.spectrum_err
+                )
+            else:
+                amp_lower = -self.amp_bound
             if center_window is None:
                 center_low = float(self.velocity.min())
                 center_high = float(self.velocity.max())
@@ -688,7 +680,7 @@ class _SequentialGaussianFitter:
                 center_low = max(float(self.velocity.min()), float(center_guesses[index]) - center_window)
                 center_high = min(float(self.velocity.max()), float(center_guesses[index]) + center_window)
             lower_bounds.extend([amp_lower, center_low, self.min_sigma])
-            upper_bounds.extend([self.amp_bound, center_high, self.max_sigma])
+            upper_bounds.extend([max(self.amp_bound, amp_lower + self.noise), center_high, self.max_sigma])
         return np.asarray(lower_bounds, dtype=float), np.asarray(upper_bounds, dtype=float)
 
     def _sort_fit(self, params, covariance):

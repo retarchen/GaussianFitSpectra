@@ -45,8 +45,8 @@ Use ``min_fwhm`` and ``max_fwhm`` to constrain component widths:
    )
 
 For absorption spectra represented as ``1 - exp(-tau)`` or tau, use
-``positive_amplitudes=True`` so fitted Gaussian amplitudes cannot become
-negative:
+``positive_amplitudes=True`` so each fitted Gaussian amplitude is constrained
+to be at least three times the local uncertainty:
 
 .. code-block:: python
 

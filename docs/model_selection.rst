@@ -5,7 +5,8 @@ BIC
 ---
 
 ``method="bic"`` is the default. The package fits models with 1 through
-``max_components`` Gaussian components and selects the model with the lowest BIC:
+``max_components`` Gaussian components and accepts another component when its
+BIC improves by more than ``bic_weight``:
 
 .. math::
 
@@ -22,8 +23,9 @@ Absorption Spectra
 ------------------
 
 By default, Gaussian amplitudes may be positive or negative. For absorption
-profiles in ``1 - exp(-tau)`` or tau form, negative Gaussian amplitudes are not
-physical, so use:
+profiles in ``1 - exp(-tau)`` or tau form, use
+``positive_amplitudes=True``. Each component is then constrained during fitting
+to an amplitude of at least three times the local uncertainty:
 
 .. code-block:: python
 

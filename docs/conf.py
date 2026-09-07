@@ -10,7 +10,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 project = "gaussFitSpec"
 author = "Hongxing Chen"
-release = "1.0.0"
+release = "1.0.3"
 
 extensions = [
     "sphinx.ext.autodoc",
