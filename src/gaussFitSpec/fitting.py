@@ -557,10 +557,8 @@ class _SequentialGaussianFitter:
         candidates = np.unique(np.concatenate([peak_indices, dip_indices, [int(np.argmax(np.abs(smoothed)))]]))
         candidates = sorted(candidates, key=lambda idx: abs(smoothed[idx]), reverse=True)
 
-        for idx in candidates:
-            center = float(self.velocity[idx])
-            if all(abs(center - existing) >= max(self.min_sigma * FWHM_FACTOR, abs(self.dx) * 2.0) for existing in used_centers):
-                return center
+        if candidates:
+            return float(self.velocity[candidates[0]])
 
         return float(self.velocity[int(np.argmax(np.abs(residual)))])
 
@@ -624,11 +622,8 @@ class _SequentialGaussianFitter:
             return np.array([], dtype=float)
 
         candidates = []
-        min_separation = max(self.min_sigma * FWHM_FACTOR, abs(self.dx) * 2.0)
         for idx in ordered[:5]:
-            center = float(self.velocity[idx])
-            if all(abs(center - existing) >= min_separation for existing in used_centers):
-                candidates.append(center)
+            candidates.append(float(self.velocity[idx]))
         return np.asarray(candidates, dtype=float)
 
     def _refit_filtered_components(self, params, covariance, stats_dict, bic_history, center_window=None):

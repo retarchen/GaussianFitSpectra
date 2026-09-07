@@ -19,6 +19,9 @@ During BIC model selection, weak components are filtered after the accepted
 candidate model is chosen. For manual ``initial_centers`` fits, pass
 ``filter_components=True`` to apply the same cleanup.
 
+Automatic residual candidates are allowed to overlap an existing fitted center,
+so closely spaced Gaussian components can be tested when the data support them.
+
 Absorption Spectra
 ------------------
 
